@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SyncCross — Traffic OS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { theme: { extend: { colors: { ink: '#07111f', panel: '#0d1a2d', cyan: '#22d3ee' } } } };
+  </script>
+  <style>
+    body { background: radial-gradient(circle at top, #102a43 0%, #07111f 48%, #030712 100%); }
+    canvas { image-rendering: auto; }
+    .glass { background: rgba(13,26,45,.82); backdrop-filter: blur(16px); border: 1px solid rgba(148,163,184,.12); }
+    .terminal { scrollbar-width: thin; scrollbar-color: #334155 transparent; }
+    .switch { width: 44px; height: 24px; background: #334155; border-radius: 999px; position: relative; transition: .2s; }
+    .switch::after { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; border-radius: 50%; background: white; transition: .2s; }
+    .switch.on { background: #0891b2; box-shadow: 0 0 18px rgba(34,211,238,.45); }
+    .switch.on::after { transform: translateX(20px); }
+  </style>
+</head>
+<body class="min-h-screen text-slate-100 antialiased">
+  <header class="border-b border-slate-800/80 px-5 py-4 md:px-8">
+    <div class="mx-auto flex max-w-[1500px] items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="grid h-10 w-10 place-items-center rounded-xl bg-cyan-400 text-ink shadow-lg shadow-cyan-500/20">SC</div>
+        <div><h1 class="font-semibold tracking-wide">SyncCross <span class="text-cyan-400">Traffic OS</span></h1><p class="text-xs text-slate-400">Multi-threaded intersection controller</p></div>
+      </div>
+      <div class="flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-300"><span class="h-2 w-2 animate-pulse rounded-full bg-emerald-400"></span>Engine Online</div>
+    </div>
+  </header>
+
+  <main class="mx-auto grid max-w-[1500px] gap-5 p-5 md:p-8 lg:grid-cols-[minmax(520px,1fr)_360px]">
+    <section class="space-y-5">
+      <div class="glass rounded-2xl p-3 md:p-4">
+        <div class="mb-3 flex items-center justify-between px-1">
+          <div><p class="text-xs font-semibold uppercase tracking-[.2em] text-cyan-400">Live Simulation</p><h2 class="mt-1 text-lg font-semibold">Intersection 04-A</h2></div>
+          <div class="flex gap-2 text-xs"><span class="rounded-md bg-slate-800 px-2 py-1">4 Quadrants</span><span class="rounded-md bg-slate-800 px-2 py-1">8 Active Nodes</span></div>
+        </div>
+        <canvas id="intersection" class="h-[520px] w-full rounded-xl bg-[#081423]" aria-label="Animated four-way traffic intersection"></canvas>
+      </div>
+
+      <div class="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+        <article class="glass rounded-xl p-4"><p class="text-xs text-slate-400">Throughput</p><div class="mt-2 flex items-end justify-between"><strong id="throughput" class="text-2xl">0</strong><span class="text-xs text-emerald-400">vehicles served</span></div></article>
+        <article class="glass rounded-xl p-4"><p class="text-xs text-slate-400">Average Wait</p><div class="mt-2 flex items-end justify-between"><strong id="wait" class="text-2xl">0.0s</strong><span class="text-xs text-cyan-400">live mean</span></div></article>
+        <article class="glass rounded-xl p-4"><p class="text-xs text-slate-400">Lock Contention</p><div class="mt-2 flex items-end justify-between"><strong id="contention" class="text-2xl">0%</strong><span class="text-xs text-amber-400">quadrant usage</span></div></article>
+        <article class="glass rounded-xl p-4"><p class="text-xs text-slate-400">Active Locks</p><div class="mt-2 flex items-end justify-between"><strong id="locks" class="text-2xl">0 / 4</strong><span class="text-xs text-violet-400">mutex objects</span></div></article>
+      </div>
+    </section>
+
+    <aside class="space-y-5">
+      <section class="glass rounded-2xl p-5">
+        <p class="text-xs font-semibold uppercase tracking-[.2em] text-cyan-400">Simulation Controls</p>
+        <div class="mt-4 space-y-3">
+          <button id="spawnNormal" class="w-full rounded-xl border border-cyan-400/30 bg-cyan-400/10 px-4 py-3 text-left text-sm font-medium transition hover:bg-cyan-400/20"><span class="mr-2 text-cyan-300">＋</span> Spawn Normal Vehicle</button>
+          <button id="spawnEmergency" class="w-full rounded-xl border border-red-400/30 bg-red-400/10 px-4 py-3 text-left text-sm font-medium text-red-100 transition hover:bg-red-400/20"><span class="mr-2">🚑</span> Trigger Emergency Ambulance</button>
+          <div class="flex items-center justify-between border-t border-slate-700/60 pt-4">
+            <div><p class="text-sm font-medium">Deadlock Avoidance Protocol</p><p id="protocolText" class="text-xs text-emerald-400">Hierarchy ordering enabled</p></div>
+            <button id="protocol" aria-label="Toggle deadlock avoidance" class="switch on"></button>
+          </div>
+        </div>
+      </section>
+
+      <section class="glass overflow-hidden rounded-2xl">
+        <div class="flex items-center justify-between border-b border-slate-700/60 px-4 py-3"><div><p class="text-xs font-semibold uppercase tracking-[.16em] text-cyan-400">OS Telemetry</p><p class="text-xs text-slate-500">pthread kernel console</p></div><span class="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px_#34d399]"></span></div>
+        <div id="terminal" class="terminal h-[265px] overflow-y-auto px-4 py-3 font-mono text-[11px] leading-5 text-slate-300"></div>
+      </section>
+    </aside>
+  </main>
+
+<script>
+(() => {
+  const canvas = document.getElementById('intersection');
+  const ctx = canvas.getContext('2d');
+  const terminal = document.getElementById('terminal');
+  let protocolOn = true;
+  let emergency = false;
+  let vehicles = [];
+  let served = 0;
+  let lockCount = 0;
+  let waits = [];
+  let idCounter = 1;
+  let lastEmergency = 0;
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingCanvasRect?.() || canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function log(message, color = '#22d3ee') {
+    const time = new Date().toLocaleTimeString([], {hour12:false});
+    const line = document.createElement('div');
+    line.innerHTML = `<span class="text-slate-600">[${time}]</span> <span style="color:${color}">${message}</span>`;
+    terminal.appendChild(line);
+    terminal.scrollTop = terminal.scrollHeight;
+  }
+
+  function spawn(emergencyVehicle=false) {
+    if (emergencyVehicle) {
+      emergency = true;
+      lastEmergency = Date.now();
+      log('pthread_cond_broadcast: emergency corridor requested', '#f87171');
+      log('pthread_mutex_lock: ambulance requests Q0 -> Q3', '#f87171');
+      for (const v of vehicles) if (!v.emergency && protocolOn) { v.waiting = true; waits.push(performance.now()); }
+      lockCount = Math.min(4, lockCount + 2);
+    } else {
+      log(`pthread_create: vehicle #${idCounter} spawned`, '#22d3ee');
+      log(`pthread_mutex_lock: vehicle #${idCounter} requests Q_low -> Q_high`, '#a78bfa');
+    }
+    const approaches = ['North','East','South','West'];
+    const approach = approaches[(idCounter + (emergencyVehicle ? 1 : 0)) % 4];
+    vehicles.push({ id:idCounter++, emergency: emergencyVehicle, approach, waiting: emergencyVehicle && !protocolOn, progress: 0, speed: emergencyVehicle ? .018 : .009 + Math.random()*.004 });
+    updateMetrics();
+  }
+
+  function position(v, cx, cy, roadW) {
+    let x, y;
+    const t = v.progress;
+    if (v.approach === 'North') { x=cx+(v.id%2? -10:10); y=-40+t*(cy*2+80); }
+    if (v.approach === 'South') { x=cx+(v.id%2?10:-10); y=canvas.clientHeight+40-t*(canvas.clientHeight-cy+cy+80); }
+    if (v.approach === 'East') { x=canvas.clientWidth+40-t*(canvas.clientWidth-cx+cx+80); y=cy+(v.id%2?10:-10); }
+    if (v.approach === 'West') { x=-40+t*(canvas.clientWidth-cx+cx+80); y=cy+(v.id%2?-10:10); }
+    return {x,y};
+  }
+
+  function drawVehicle(x,y,v) {
+    ctx.save(); ctx.translate(x,y);
+    if (v.approach === 'East' || v.approach === 'West') ctx.rotate(Math.PI/2);
+    ctx.shadowBlur = v.emergency ? 18 : 4;
+    ctx.shadowColor = v.emergency ? '#ef4444' : '#22d3ee';
+    ctx.fillStyle = v.waiting ? '#64748b' : (v.emergency ? '#ef4444' : '#38bdf8');
+    ctx.roundRect(-10,-18,20,36,5); ctx.fill();
+    if (v.emergency) { ctx.fillStyle='#fff'; ctx.fillRect(-7,-8,14,16); ctx.fillStyle=Math.floor(Date.now()/120)%2?'#2563eb':'#ef4444'; ctx.fillRect(-8,-14,16,3); }
+    ctx.restore();
+  }
+
+  function draw() {
+    const w=canvas.clientWidth, h=canvas.clientHeight, cx=w/2, cy=h/2, road=180;
+    ctx.clearRect(0,0,w,h);
+    ctx.fillStyle='#07111f'; ctx.fillRect(0,0,w,h);
+    ctx.strokeStyle='rgba(100,116,139,.08)'; ctx.lineWidth=1;
+    for(let x=0;x<w;x+=32){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();}
+    for(let y=0;y<h;y+=32){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
+    ctx.fillStyle='#152238'; ctx.fillRect(cx-road/2,0,road,h); ctx.fillRect(0,cy-road/2,w,road);
+    ctx.fillStyle='rgba(34,211,238,.035)'; ctx.fillRect(cx-road/2,cy-road/2,road,road);
+
+    ctx.strokeStyle='#64748b'; ctx.setLineDash([18,18]); ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(cx,0);ctx.lineTo(cx,cy-road/2);ctx.moveTo(cx,cy+road/2);ctx.lineTo(cx,h);ctx.moveTo(0,cy);ctx.lineTo(cx-road/2,cy);ctx.moveTo(cx+road/2,cy);ctx.lineTo(w,cy);ctx.stroke();ctx.setLineDash([]);
+
+    const zones=[{x:cx-road/2-95,y:cy-road/2-95,l:'Q0 NW'},{x:cx+road/2+95,y:cy-road/2-95,l:'Q1 NE'},{x:cx-road/2-95,y:cy+road/2+95,l:'Q2 SW'},{x:cx+road/2+95,y:cy+road/2+95,l:'Q3 SE'}];
+    zones.forEach((z,i)=>{ctx.fillStyle=i===0?'rgba(34,211,238,.06)':'rgba(139,92,246,.05)';ctx.strokeStyle='rgba(148,163,184,.18)';ctx.beginPath();ctx.roundRect(z.x-48,z.y-48,96,96,14);ctx.fill();ctx.stroke();ctx.fillStyle='#94a3b8';ctx.font='11px monospace';ctx.textAlign='center';ctx.fillText(z.l,z.x,z.y);});
+
+    const lights=[[cx-road/2-14,cy-road/2-14],[cx+road/2+14,cy-road/2-14],[cx-road/2-14,cy+road/2+14],[cx+road/2+14,cy+road/2+14]];
+    lights.forEach(([x,y],i)=>{ctx.fillStyle='#020617';ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();ctx.fillStyle=(i%2===0?'#22c55e':'#f59e0b');ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fill();});
+
+    for(const v of vehicles){
+      if(!v.waiting || emergency===false) v.progress += v.speed;
+      if(v.progress>1.9){served++; lockCount=Math.max(0,lockCount-(v.emergency?2:1)); vehicles.splice(vehicles.indexOf(v),1); if(v.emergency){emergency=false; for(const waiting of vehicles) waiting.waiting=false; log('pthread_cond_broadcast: emergency cleared; regular traffic resumed','#d946ef');} log(`pthread_mutex_unlock: vehicle #${v.id} cleared intersection`,'#60a5fa');continue;}
+      const p=position(v,cx,cy,road); drawVehicle(p.x,p.y,v);
+    }
+    updateMetrics();
+    requestAnimationFrame(draw);
+  }
+
+  function updateMetrics(){
+    document.getElementById('throughput').textContent=served;
+    document.getElementById('wait').textContent=(protocolOn?(waits.length?0.8:0.2):(waits.length?2.4:0.5)).toFixed(1)+'s';
+    document.getElementById('contention').textContent=Math.min(100,lockCount*12)+'%';
+    document.getElementById('locks').textContent=lockCount+' / 4';
+  }
+
+  document.getElementById('spawnNormal').addEventListener('click',()=>spawn(false));
+  document.getElementById('spawnEmergency').addEventListener('click',()=>{if(Date.now()-lastEmergency>600||!emergency)spawn(true);});
+  document.getElementById('protocol').addEventListener('click',e=>{protocolOn=!protocolOn;e.currentTarget.classList.toggle('on',protocolOn);document.getElementById('protocolText').textContent=protocolOn?'Hierarchy ordering enabled':'Reverse locking permitted';document.getElementById('protocolText').className=protocolOn?'text-xs text-emerald-400':'text-xs text-red-400';log(protocolOn?'DEADLOCK_AVOIDANCE: strict Q_low -> Q_high restored':'WARNING: hierarchy protocol OFF — circular wait risk','#f87171');});
+
+  log('pthread_mutex_init: 4 quadrant resources initialized','#22d3ee');
+  log('pthread_cond_init: emergency broadcast channel ready','#a78bfa');
+  log('ENGINE_ONLINE: resource hierarchy active','#34d399');
+  draw();
+})();
+</script>
+</body>
+</html>
