@@ -1,0 +1,64 @@
+Ubuntu can run inside Windows using **WSL (Windows Subsystem for Linux)**.
+
+### 1. Install Ubuntu
+
+Open **PowerShell as Administrator** and run:
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Restart Windows when prompted, then open Ubuntu from the Start menu.
+
+### 2. Create your Ubuntu password
+
+During the first launch:
+
+1. Enter a new Linux username.
+2. Enter and confirm a Linux password.
+
+### 3. Install the required tools
+
+Run this inside Ubuntu:
+
+```bash
+sudo apt update
+sudo apt install g++ make -y
+```
+
+### 4. Open your project
+
+Your Windows project directory is accessible through `/mnt/c`. From Ubuntu:
+
+```bash
+cd "/mnt/c/Users/HP/OneDrive/Desktop/career/PROJECTS/Multi-Threaded Traffic Light Intersection"
+```
+
+Compile and run:
+
+```bash
+make
+make run
+```
+
+Or without `make`:
+
+```bash
+g++ -Wall -pthread -std=c++11 main.cpp -o traffic_controller
+./traffic_controller
+```
+
+If this project is missing from Ubuntu or you move around Linux more comfortably, copy the project into Ubuntu:
+
+```bash
+mkdir -p ~/projects
+cp -r "/mnt/c/Users/HP/OneDrive/Desktop/career/PROJECTS/Multi-Threaded Traffic Light Intersection" ~/projects/
+cd ~/projects/Multi-Threaded\ Traffic\ Light\ Intersection
+make run
+```
+
+Stop or exit Ubuntu with:
+
+```bash
+exit
+```

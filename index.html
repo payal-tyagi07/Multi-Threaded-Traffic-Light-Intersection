@@ -17,55 +17,87 @@
     .switch::after { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; border-radius: 50%; background: white; transition: .2s; }
     .switch.on { background: #0891b2; box-shadow: 0 0 18px rgba(34,211,238,.45); }
     .switch.on::after { transform: translateX(20px); }
+    .metric-card { display:flex; align-items:center; gap:.75rem; border:1px solid rgba(148,163,184,.12); border-radius:.75rem; background:rgba(13,26,45,.82); padding:.9rem; }
+    .metric-card .metric-icon { display:grid; width:40px; height:40px; flex:none; place-items:center; border-radius:.65rem; font-size:18px; }
+    .metric-card p { color:#64748b; font-size:.68rem; text-transform:uppercase; letter-spacing:.08em; }
+    .metric-card strong { font-size:1.15rem; font-weight:650; }
+    .metric-card span { display:block; color:#64748b; font-size:.68rem; }
+    .panel-title { font-size:.68rem; font-weight:700; letter-spacing:.18em; text-transform:uppercase; color:#22d3ee; }
+    .command-button { min-height:58px; display:flex; align-items:center; justify-content:center; gap:.55rem; border:1px solid rgba(148,163,184,.14); border-radius:.75rem; background:rgba(148,163,184,.04); font-size:.75rem; transition:.2s; }
+    .command-button:hover { border-color:rgba(34,211,238,.35); background:rgba(34,211,238,.08); transform:translateY(-1px); }
+    .command-button.emergency { border-color:rgba(248,113,113,.25); background:rgba(239,68,68,.08); color:#fecaca; }
+    .command-button.emergency:hover { border-color:rgba(248,113,113,.55); background:rgba(239,68,68,.16); }
+    .phase-row { display:flex; align-items:center; justify-content:space-between; border-radius:.65rem; background:rgba(2,6,23,.3); padding:.65rem .75rem; }
+    .signal-stack { display:flex; gap:4px; border-radius:999px; background:#020617; padding:5px; }
+    .signal-dot { width:10px; height:10px; border-radius:50%; background:#263044; }
+    .signal-dot.red { background:#ef4444; box-shadow:0 0 10px rgba(239,68,68,.7); }
+    .signal-dot.yellow { background:#f59e0b; box-shadow:0 0 10px rgba(245,158,11,.7); }
+    .signal-dot.green { background:#22c55e; box-shadow:0 0 10px rgba(34,197,94,.7); }
   </style>
 </head>
-<body class="min-h-screen text-slate-100 antialiased">
-  <header class="border-b border-slate-800/80 px-5 py-4 md:px-8">
+<body class="min-h-screen overflow-x-hidden text-slate-100 antialiased">
+  <header class="border-b border-white/10 px-5 py-4 md:px-8">
     <div class="mx-auto flex max-w-[1500px] items-center justify-between">
       <div class="flex items-center gap-3">
-        <div class="grid h-10 w-10 place-items-center rounded-xl bg-cyan-400 text-ink shadow-lg shadow-cyan-500/20">SC</div>
-        <div><h1 class="font-semibold tracking-wide">SyncCross <span class="text-cyan-400">Traffic OS</span></h1><p class="text-xs text-slate-400">Multi-threaded intersection controller</p></div>
+        <div class="grid h-11 w-11 place-items-center rounded-xl border border-cyan-300/20 bg-cyan-400/10 text-cyan-300 shadow-[0_0_30px_rgba(34,211,238,.12)]">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v18M3 12h18M7 5l5 7 5-7M5 17l7-5 7 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </div>
+        <div><h1 class="text-lg font-semibold tracking-wide">SYNC<span class="text-cyan-400">CROSS</span></h1><p class="text-[11px] uppercase tracking-[.22em] text-slate-500">Intelligent Intersection</p></div>
       </div>
-      <div class="flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-300"><span class="h-2 w-2 animate-pulse rounded-full bg-emerald-400"></span>Engine Online</div>
+      <div class="flex items-center gap-4">
+        <div class="hidden items-center gap-2 text-xs text-slate-400 sm:flex"><span class="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_12px_#34d399]"></span><span>System Online</span></div>
+        <div id="clock" class="rounded-lg border border-white/10 bg-white/[.03] px-3 py-2 font-mono text-xs text-slate-300">00:00:00</div>
+      </div>
     </div>
   </header>
 
-  <main class="mx-auto grid max-w-[1500px] gap-5 p-5 md:p-8 lg:grid-cols-[minmax(520px,1fr)_360px]">
-    <section class="space-y-5">
-      <div class="glass rounded-2xl p-3 md:p-4">
-        <div class="mb-3 flex items-center justify-between px-1">
-          <div><p class="text-xs font-semibold uppercase tracking-[.2em] text-cyan-400">Live Simulation</p><h2 class="mt-1 text-lg font-semibold">Intersection 04-A</h2></div>
-          <div class="flex gap-2 text-xs"><span class="rounded-md bg-slate-800 px-2 py-1">4 Quadrants</span><span class="rounded-md bg-slate-800 px-2 py-1">8 Active Nodes</span></div>
+  <main class="mx-auto max-w-[1500px] p-5 md:p-8">
+    <div class="mb-5 flex flex-wrap items-end justify-between gap-4">
+      <div><p class="text-xs font-semibold uppercase tracking-[.25em] text-cyan-400">Live Operations</p><h2 class="mt-1 text-2xl font-semibold">Intersection <span class="text-slate-500">/ 04-A</span></h2></div>
+      <div class="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[.03] px-3 py-2 text-xs"><span class="text-slate-500">Adaptive mode</span><span id="modeBadge" class="rounded-md bg-cyan-400/15 px-2 py-1 text-cyan-300">TRAFFIC</span></div>
+    </div>
+
+    <div class="grid gap-5 xl:grid-cols-[minmax(600px,1fr)_320px]">
+      <section class="min-w-0 space-y-5">
+        <div class="glass overflow-hidden rounded-2xl p-3 shadow-2xl shadow-black/20 md:p-4">
+          <div class="mb-3 flex items-center justify-between px-1"><p class="text-xs text-slate-400">4-way junction · real-time vehicle flow</p><div class="flex items-center gap-2 text-[11px] text-slate-400"><span class="h-2 w-2 rounded-full bg-emerald-400"></span><span id="phaseLabel">NS Green</span></div></div>
+          <canvas id="intersection" class="h-[580px] w-full rounded-xl bg-[#182a22]" aria-label="Animated aerial four-way traffic intersection"></canvas>
         </div>
-        <canvas id="intersection" class="h-[520px] w-full rounded-xl bg-[#081423]" aria-label="Animated four-way traffic intersection"></canvas>
-      </div>
 
-      <div class="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
-        <article class="glass rounded-xl p-4"><p class="text-xs text-slate-400">Throughput</p><div class="mt-2 flex items-end justify-between"><strong id="throughput" class="text-2xl">0</strong><span class="text-xs text-emerald-400">vehicles served</span></div></article>
-        <article class="glass rounded-xl p-4"><p class="text-xs text-slate-400">Average Wait</p><div class="mt-2 flex items-end justify-between"><strong id="wait" class="text-2xl">0.0s</strong><span class="text-xs text-cyan-400">live mean</span></div></article>
-        <article class="glass rounded-xl p-4"><p class="text-xs text-slate-400">Lock Contention</p><div class="mt-2 flex items-end justify-between"><strong id="contention" class="text-2xl">0%</strong><span class="text-xs text-amber-400">quadrant usage</span></div></article>
-        <article class="glass rounded-xl p-4"><p class="text-xs text-slate-400">Active Locks</p><div class="mt-2 flex items-end justify-between"><strong id="locks" class="text-2xl">0 / 4</strong><span class="text-xs text-violet-400">mutex objects</span></div></article>
-      </div>
-    </section>
+        <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <article class="metric-card"><div class="metric-icon bg-cyan-400/10 text-cyan-300">↗</div><div><p>Throughput</p><strong id="throughput">0</strong><span> vehicles / min</span></div></article>
+          <article class="metric-card"><div class="metric-icon bg-violet-400/10 text-violet-300">◷</div><div><p>Avg. Wait</p><strong id="wait">0.0s</strong><span id="waitTrend">Stable</span></div></article>
+          <article class="metric-card"><div class="metric-icon bg-amber-400/10 text-amber-300">⌁</div><div><p>Queue Load</p><strong id="contention">0%</strong><span>junction capacity</span></div></article>
+          <article class="metric-card"><div class="metric-icon bg-emerald-400/10 text-emerald-300">⚿</div><div><p>Active Locks</p><strong id="locks">0 / 4</strong><span>quadrants secured</span></div></article>
+        </div>
+      </section>
 
-    <aside class="space-y-5">
-      <section class="glass rounded-2xl p-5">
-        <p class="text-xs font-semibold uppercase tracking-[.2em] text-cyan-400">Simulation Controls</p>
-        <div class="mt-4 space-y-3">
-          <button id="spawnNormal" class="w-full rounded-xl border border-cyan-400/30 bg-cyan-400/10 px-4 py-3 text-left text-sm font-medium transition hover:bg-cyan-400/20"><span class="mr-2 text-cyan-300">＋</span> Spawn Normal Vehicle</button>
-          <button id="spawnEmergency" class="w-full rounded-xl border border-red-400/30 bg-red-400/10 px-4 py-3 text-left text-sm font-medium text-red-100 transition hover:bg-red-400/20"><span class="mr-2">🚑</span> Trigger Emergency Ambulance</button>
-          <div class="flex items-center justify-between border-t border-slate-700/60 pt-4">
-            <div><p class="text-sm font-medium">Deadlock Avoidance Protocol</p><p id="protocolText" class="text-xs text-emerald-400">Hierarchy ordering enabled</p></div>
-            <button id="protocol" aria-label="Toggle deadlock avoidance" class="switch on"></button>
+      <aside class="space-y-5">
+        <section class="glass rounded-2xl p-4">
+          <p class="panel-title">Traffic Commands</p>
+          <div class="mt-4 grid grid-cols-2 gap-3">
+            <button id="spawnNorthSouth" class="command-button"><span class="text-lg">↓</span><span>North / South</span></button>
+            <button id="spawnEastWest" class="command-button"><span class="text-lg">→</span><span>East / West</span></button>
+            <button id="spawnNormal" class="command-button col-span-2"><span class="text-cyan-300">＋</span><span>Spawn Random Vehicle</span></button>
+            <button id="spawnEmergency" class="command-button emergency col-span-2"><span>＋</span><span>Emergency Priority</span></button>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section class="glass overflow-hidden rounded-2xl">
-        <div class="flex items-center justify-between border-b border-slate-700/60 px-4 py-3"><div><p class="text-xs font-semibold uppercase tracking-[.16em] text-cyan-400">OS Telemetry</p><p class="text-xs text-slate-500">pthread kernel console</p></div><span class="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px_#34d399]"></span></div>
-        <div id="terminal" class="terminal h-[265px] overflow-y-auto px-4 py-3 font-mono text-[11px] leading-5 text-slate-300"></div>
-      </section>
-    </aside>
+        <section class="glass rounded-2xl p-4">
+          <p class="panel-title">Signal Phases</p>
+          <div class="mt-4 space-y-3">
+            <div class="phase-row"><span class="text-xs text-slate-400">North–South</span><div class="flex items-end gap-1" id="nsLights"></div></div>
+            <div class="phase-row"><span class="text-xs text-slate-400">East–West</span><div class="flex items-end gap-1" id="ewLights"></div></div>
+          </div>
+          <div class="mt-4 border-t border-white/10 pt-3 text-xs"><div class="flex justify-between"><span class="text-slate-500">Next phase</span><strong id="countdown" class="font-mono text-cyan-300">12s</strong></div></div>
+        </section>
+
+        <section class="glass overflow-hidden rounded-2xl">
+          <div class="flex items-center justify-between border-b border-white/10 px-4 py-3"><p class="panel-title">System Log</p><span class="text-[10px] uppercase tracking-widest text-emerald-400">Live</span></div>
+          <div id="terminal" class="terminal h-[230px] overflow-y-auto px-4 py-3 font-mono text-[10px] leading-5 text-slate-400"></div>
+        </section>
+      </aside>
+    </div>
   </main>
 
 <script>
