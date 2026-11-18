@@ -80,16 +80,17 @@
             <button id="spawnEastWest" class="command-button"><span class="text-lg">→</span><span>East / West</span></button>
             <button id="spawnNormal" class="command-button col-span-2"><span class="text-cyan-300">＋</span><span>Spawn Random Vehicle</span></button>
             <button id="spawnEmergency" class="command-button emergency col-span-2"><span>＋</span><span>Emergency Priority</span></button>
+            <button id="toggleTraffic" class="command-button col-span-2"><span class="text-emerald-300">●</span><span>Auto Traffic: ON · Heavy</span></button>
           </div>
         </section>
 
         <section class="glass rounded-2xl p-4">
           <p class="panel-title">Signal Phases</p>
           <div class="mt-4 space-y-3">
-            <div class="phase-row"><span class="text-xs text-slate-400">North–South</span><div class="flex items-end gap-1" id="nsLights"></div></div>
-            <div class="phase-row"><span class="text-xs text-slate-400">East–West</span><div class="flex items-end gap-1" id="ewLights"></div></div>
+            <div class="phase-row"><span class="flex items-center gap-2 text-xs text-slate-400">North–South <span id="nsQueueCount" class="rounded bg-slate-700/70 px-1.5 py-0.5 font-mono text-[10px]">0 queued</span></span><div class="flex items-end gap-1" id="nsLights"></div></div>
+            <div class="phase-row"><span class="flex items-center gap-2 text-xs text-slate-400">East–West <span id="ewQueueCount" class="rounded bg-slate-700/70 px-1.5 py-0.5 font-mono text-[10px]">0 queued</span></span><div class="flex items-end gap-1" id="ewLights"></div></div>
           </div>
-          <div class="mt-4 border-t border-white/10 pt-3 text-xs"><div class="flex justify-between"><span class="text-slate-500">Next phase</span><strong id="countdown" class="font-mono text-cyan-300">12s</strong></div></div>
+          <div class="mt-4 border-t border-white/10 pt-3 text-xs"><div class="flex justify-between"><span id="phaseHint" class="text-slate-500">Opposing queue</span><strong id="countdown" class="font-mono text-cyan-300">0</strong></div></div>
         </section>
 
         <section class="glass overflow-hidden rounded-2xl">
@@ -105,14 +106,31 @@
   const canvas = document.getElementById('intersection');
   const ctx = canvas.getContext('2d');
   const terminal = document.getElementById('terminal');
+  const MIN_GREEN_MS = 2800;
+  const MAX_GREEN_MS = 11000;
+  const EMPTY_SWITCH_MS = 900;
+  const YELLOW_MS = 800;
+  const ALL_RED_MS = 450;
   let protocolOn = true;
   let emergency = false;
   let vehicles = [];
   let served = 0;
   let lockCount = 0;
-  let waits = [];
   let idCounter = 1;
   let lastEmergency = 0;
+  let activeGroup = 'NS';
+  let signalState = 'green';
+  let phaseStartedAt = performance.now();
+  let transitionAt = 0;
+  let pendingGroup = null;
+  let emptySince = null;
+  let autoTraffic = true;
+  let nextArrivalAt = performance.now() + 350;
+  let demandBurst = { group:'NS', remaining:9 };
+  let lastFrameAt = performance.now();
+  let totalWaitMs = 0;
+  let completedWaits = 0;
+  let targetGreenMs = 6000;
 
   function resize() {
     const dpr = window.devicePixelRatio || 1;
@@ -129,90 +147,368 @@
     const line = document.createElement('div');
     line.innerHTML = `<span class="text-slate-600">[${time}]</span> <span style="color:${color}">${message}</span>`;
     terminal.appendChild(line);
+    while(terminal.children.length>100) terminal.firstElementChild.remove();
     terminal.scrollTop = terminal.scrollHeight;
   }
 
-  function spawn(emergencyVehicle=false) {
+  function groupFor(approach) {
+    return approach === 'North' || approach === 'South' ? 'NS' : 'EW';
+  }
+
+  function spawn(emergencyVehicle=false, requestedApproach=null, automatic=false) {
     if (emergencyVehicle) {
       emergency = true;
       lastEmergency = Date.now();
-      log('pthread_cond_broadcast: emergency corridor requested', '#f87171');
-      log('pthread_mutex_lock: ambulance requests Q0 -> Q3', '#f87171');
-      for (const v of vehicles) if (!v.emergency && protocolOn) { v.waiting = true; waits.push(performance.now()); }
-      lockCount = Math.min(4, lockCount + 2);
-    } else {
+      log('pthread_cond_broadcast: emergency corridor requested; signal monitor notified', '#f87171');
+      log('pthread_mutex_lock: ambulance requests exclusive intersection access', '#f87171');
+      requestedApproach = requestedApproach || (Math.random()<.5?'North':'East');
+    } else if (!automatic) {
       log(`pthread_create: vehicle #${idCounter} spawned`, '#22d3ee');
       log(`pthread_mutex_lock: vehicle #${idCounter} requests Q_low -> Q_high`, '#a78bfa');
     }
+    if (!emergencyVehicle && vehicles.length > 36) return;
     const approaches = ['North','East','South','West'];
-    const approach = approaches[(idCounter + (emergencyVehicle ? 1 : 0)) % 4];
-    vehicles.push({ id:idCounter++, emergency: emergencyVehicle, approach, waiting: emergencyVehicle && !protocolOn, progress: 0, speed: emergencyVehicle ? .018 : .009 + Math.random()*.004 });
+    const approach = requestedApproach || approaches[(idCounter + (emergencyVehicle ? 1 : 0)) % 4];
+    vehicles.push({
+      id:idCounter++,
+      emergency: emergencyVehicle,
+      approach,
+      group:groupFor(approach),
+      lane:0,
+      waiting:false,
+      hasEntered:false,
+      clearedJunction:false,
+      spawnedAt:performance.now(),
+      progress:0,
+      speed: emergencyVehicle ? .022 : .008 + Math.random()*.0025
+    });
+    if(automatic && idCounter%8===0) log(`DEMAND: vehicle queue building on ${groupFor(approach)}`, '#fbbf24');
     updateMetrics();
   }
 
-  function position(v, cx, cy, roadW) {
-    let x, y;
-    const t = v.progress;
-    if (v.approach === 'North') { x=cx+(v.id%2? -10:10); y=-40+t*(cy*2+80); }
-    if (v.approach === 'South') { x=cx+(v.id%2?10:-10); y=canvas.clientHeight+40-t*(canvas.clientHeight-cy+cy+80); }
-    if (v.approach === 'East') { x=canvas.clientWidth+40-t*(canvas.clientWidth-cx+cx+80); y=cy+(v.id%2?10:-10); }
-    if (v.approach === 'West') { x=-40+t*(canvas.clientWidth-cx+cx+80); y=cy+(v.id%2?-10:10); }
-    return {x,y};
+  function queuedCount(group) {
+    return vehicles.filter(v=>v.group===group && !v.hasEntered && !v.clearedJunction).length;
   }
 
-  function drawVehicle(x,y,v) {
+  function ambulanceVehicle() {
+    return vehicles.find(v => v.emergency && !v.clearedJunction);
+  }
+
+  function junctionOccupied() {
+    return vehicles.some(v => v.hasEntered || v.inBox);
+  }
+
+  function adaptiveGreenMs(ownQueue, otherQueue) {
+    const total = ownQueue + otherQueue;
+    if (total === 0) return MIN_GREEN_MS;
+    const share = ownQueue / total;
+    return MIN_GREEN_MS + share * (MAX_GREEN_MS - MIN_GREEN_MS);
+  }
+
+  function beginChange(nextGroup, now, reason) {
+    if (signalState !== 'green') return;
+    pendingGroup = nextGroup;
+    signalState = 'yellow';
+    transitionAt = now + YELLOW_MS;
+    emptySince = null;
+    log(`SIGNAL_MONITOR: ${activeGroup} yellow clearance (${reason}) before ${nextGroup}`, '#fbbf24');
+  }
+
+  function updateController(now) {
+    const ambulance = ambulanceVehicle();
+    const otherGroup = activeGroup === 'NS' ? 'EW' : 'NS';
+    const busy = junctionOccupied();
+
+    if (ambulance && ambulance.group !== activeGroup && signalState === 'green') {
+      beginChange(ambulance.group, now, 'ambulance preemption');
+    }
+
+    if (signalState === 'yellow') {
+      if (now >= transitionAt && !busy) {
+        signalState = 'all-red';
+        transitionAt = now + ALL_RED_MS;
+        log('pthread_cond_broadcast: intersection lock released; waiting queue notified', '#a78bfa');
+      }
+      return;
+    }
+    if (signalState === 'all-red') {
+      if (now >= transitionAt && !busy) {
+        activeGroup = pendingGroup || otherGroup;
+        pendingGroup = null;
+        signalState = 'green';
+        phaseStartedAt = now;
+        emptySince = null;
+        log(`SIGNAL_MONITOR: ${activeGroup} demand granted green`, '#34d399');
+      }
+      return;
+    }
+
+    if (ambulance && ambulance.group === activeGroup) {
+      emptySince = null;
+      targetGreenMs = MAX_GREEN_MS;
+      return;
+    }
+
+    const ownQueue = queuedCount(activeGroup);
+    const otherQueue = queuedCount(otherGroup);
+    targetGreenMs = adaptiveGreenMs(ownQueue, otherQueue);
+    const elapsed = now - phaseStartedAt;
+
+    if (otherQueue > 0 && ownQueue === 0) {
+      if (emptySince === null) emptySince = now;
+      if (now - emptySince >= EMPTY_SWITCH_MS) beginChange(otherGroup, now, 'active approach empty');
+      return;
+    }
+    emptySince = null;
+    if (otherQueue === 0) return;
+
+    const opposingHeavier = otherQueue >= ownQueue + 2 && otherQueue >= 3;
+    if (opposingHeavier && elapsed >= MIN_GREEN_MS) {
+      beginChange(otherGroup, now, 'heavy side granted early green');
+      return;
+    }
+    if (elapsed >= Math.min(MAX_GREEN_MS, Math.max(MIN_GREEN_MS, targetGreenMs))) {
+      beginChange(otherGroup, now, 'adaptive split');
+    }
+  }
+
+  function generateDemand(now) {
+    if (!autoTraffic || now < nextArrivalAt) return;
+    if (demandBurst.remaining <= 0) {
+      demandBurst = { group: Math.random() < 0.55 ? 'NS' : 'EW', remaining: 5 + Math.floor(Math.random() * 8) };
+    }
+    const approach = demandBurst.group === 'NS'
+      ? (Math.random() < 0.5 ? 'North' : 'South')
+      : (Math.random() < 0.5 ? 'East' : 'West');
+    spawn(false, approach, true);
+    demandBurst.remaining--;
+    nextArrivalAt = now + 420 + Math.random() * 380;
+  }
+
+  function position(v, cx, cy, w, h) {
+    const diagonal = Math.hypot(w, h) + 120;
+    const roadAngle = Math.PI / 6;
+    const angles = { North:roadAngle, South:roadAngle + Math.PI, East:Math.PI - roadAngle, West:-roadAngle };
+    const angle = angles[v.approach];
+    const distance = -diagonal / 2 + v.progress * diagonal / 1.9;
+    const keepRight = Math.max(28, (v.roadWidth || 140) * 0.2);
+    const laneOffset = keepRight;
+    return {
+      x:cx + Math.cos(angle) * distance - Math.sin(angle) * laneOffset,
+      y:cy + Math.sin(angle) * distance + Math.cos(angle) * laneOffset,
+      angle
+    };
+  }
+
+  function drawVehicle(x,y,v,angle) {
+    const colors = ['#f5c542','#ef584b','#f2f4ef','#35a7dc','#f28b32','#a8c94a'];
+    ctx.save(); ctx.translate(x,y); ctx.rotate(angle);
+    ctx.shadowColor='rgba(15,23,42,.35)'; ctx.shadowBlur=7; ctx.shadowOffsetY=3;
+    ctx.fillStyle=v.waiting?'#92999a':(v.emergency?'#f5f2e8':colors[v.id % colors.length]);
+    ctx.roundRect(-20,-11,40,22,6); ctx.fill();
+    ctx.shadowColor='transparent'; ctx.shadowBlur=0; ctx.shadowOffsetY=0;
+    ctx.fillStyle='#25323a';
+    ctx.roundRect(-8,-8,15,16,4); ctx.fill();
+    ctx.fillStyle='rgba(193,225,230,.86)';
+    ctx.roundRect(-6,-6,10,12,3); ctx.fill();
+    ctx.fillStyle='#fff4c4'; ctx.fillRect(15,-7,3,4); ctx.fillRect(15,3,3,4);
+    ctx.fillStyle='#d94b43'; ctx.fillRect(-19,-7,2,4); ctx.fillRect(-19,3,2,4);
+    if(v.emergency){
+      ctx.fillStyle='#d9e7e8'; ctx.fillRect(-1,-8,3,16);
+      ctx.fillStyle=Math.floor(Date.now()/120)%2?'#2563eb':'#ef4444'; ctx.fillRect(-3,-2,7,4);
+    }
+    ctx.restore();
+  }
+
+  function drawTree(x,y,scale=1) {
+    ctx.save(); ctx.translate(x,y); ctx.scale(scale,scale);
+    ctx.fillStyle='rgba(46,91,26,.28)'; ctx.beginPath(); ctx.ellipse(3,8,11,6,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#755b34'; ctx.fillRect(-2,-2,4,14);
+    ctx.fillStyle='#4b8c27'; ctx.beginPath(); ctx.arc(0,-5,9,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#6eaa2b'; ctx.beginPath(); ctx.arc(-4,-9,5,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(196,225,91,.58)'; ctx.beginPath(); ctx.arc(-3,-11,2,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawRoad(cx,cy,length,angle,roadWidth) {
+    ctx.save(); ctx.translate(cx,cy); ctx.rotate(angle);
+    ctx.fillStyle='#c9cfca'; ctx.fillRect(-length/2,-roadWidth/2-12,length,roadWidth+24);
+    ctx.fillStyle='#737c7e'; ctx.fillRect(-length/2,-roadWidth/2,length,roadWidth);
+    ctx.strokeStyle='rgba(255,255,255,.82)'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(-length/2,-roadWidth/2+5); ctx.lineTo(length/2,-roadWidth/2+5);
+    ctx.moveTo(-length/2,roadWidth/2-5); ctx.lineTo(length/2,roadWidth/2-5); ctx.stroke();
+    ctx.strokeStyle='rgba(250,250,242,.85)'; ctx.lineWidth=2.5; ctx.setLineDash([17,13]);
+    ctx.beginPath(); ctx.moveTo(-length/2,0); ctx.lineTo(length/2,0); ctx.stroke(); ctx.setLineDash([]);
+    for(const side of [-1,1]){
+      const crossX=side*(roadWidth/2+24);
+      ctx.fillStyle='rgba(250,250,245,.94)';
+      for(let i=-5;i<=5;i++) ctx.fillRect(crossX-4,i*10-3,8,7);
+      ctx.fillStyle='rgba(255,255,255,.72)';
+      ctx.fillRect(side*(roadWidth/2+8)-2,-roadWidth/2+8,4,roadWidth-16);
+    }
+    ctx.restore();
+  }
+
+  function drawSignal(x,y,state,angle){
     ctx.save(); ctx.translate(x,y);
-    if (v.approach === 'East' || v.approach === 'West') ctx.rotate(Math.PI/2);
-    ctx.shadowBlur = v.emergency ? 18 : 4;
-    ctx.shadowColor = v.emergency ? '#ef4444' : '#22d3ee';
-    ctx.fillStyle = v.waiting ? '#64748b' : (v.emergency ? '#ef4444' : '#38bdf8');
-    ctx.roundRect(-10,-18,20,36,5); ctx.fill();
-    if (v.emergency) { ctx.fillStyle='#fff'; ctx.fillRect(-7,-8,14,16); ctx.fillStyle=Math.floor(Date.now()/120)%2?'#2563eb':'#ef4444'; ctx.fillRect(-8,-14,16,3); }
+    if(typeof angle==='number') ctx.rotate(angle);
+    ctx.fillStyle='rgba(30,40,37,.28)'; ctx.beginPath(); ctx.ellipse(2,13,10,5,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#525b59'; ctx.fillRect(-2,2,4,11);
+    ctx.fillStyle='#303a3d'; ctx.roundRect(-6,-15,12,21,4); ctx.fill();
+    ['#ef514c','#f2bc3c','#42b96a'].forEach((color,i)=>{
+      const activeIndex=state==='green'?2:state==='yellow'?1:0;
+      ctx.fillStyle=i===activeIndex?color:'#56605e';
+      ctx.beginPath(); ctx.arc(0,-10+i*6,2,0,Math.PI*2); ctx.fill();
+    });
     ctx.restore();
   }
 
   function draw() {
-    const w=canvas.clientWidth, h=canvas.clientHeight, cx=w/2, cy=h/2, road=180;
+    const w=canvas.clientWidth, h=canvas.clientHeight, cx=w/2, cy=h/2;
+    const roadWidth=Math.min(176,Math.max(124,w*.24));
+    const roadLength=Math.hypot(w,h)*1.55;
+    const roadAngle=Math.PI/6;
+    const now=performance.now();
+    const diagonal=Math.hypot(w,h)+120;
+    const stopProgress=(diagonal/2-roadWidth/2-52)*1.9/diagonal;
+    const exitProgress=(diagonal/2+roadWidth/2+36)*1.9/diagonal;
+    const delta=Math.min(2,Math.max(.5,(now-lastFrameAt)/16.67));
+    lastFrameAt=now;
+    vehicles.forEach(v => {
+      v.inBox = !v.clearedJunction && v.progress > stopProgress && v.progress < exitProgress;
+    });
+    generateDemand(now);
+    updateController(now);
     ctx.clearRect(0,0,w,h);
-    ctx.fillStyle='#07111f'; ctx.fillRect(0,0,w,h);
-    ctx.strokeStyle='rgba(100,116,139,.08)'; ctx.lineWidth=1;
-    for(let x=0;x<w;x+=32){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();}
-    for(let y=0;y<h;y+=32){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
-    ctx.fillStyle='#152238'; ctx.fillRect(cx-road/2,0,road,h); ctx.fillRect(0,cy-road/2,w,road);
-    ctx.fillStyle='rgba(34,211,238,.035)'; ctx.fillRect(cx-road/2,cy-road/2,road,road);
+    ctx.fillStyle='#8bbd35'; ctx.fillRect(0,0,w,h);
 
-    ctx.strokeStyle='#64748b'; ctx.setLineDash([18,18]); ctx.lineWidth=2;
-    ctx.beginPath();ctx.moveTo(cx,0);ctx.lineTo(cx,cy-road/2);ctx.moveTo(cx,cy+road/2);ctx.lineTo(cx,h);ctx.moveTo(0,cy);ctx.lineTo(cx-road/2,cy);ctx.moveTo(cx+road/2,cy);ctx.lineTo(w,cy);ctx.stroke();ctx.setLineDash([]);
+    // Soft grassy verges and small roadside trees give the junction an illustrated, aerial-map feel.
+    ctx.fillStyle='rgba(189,220,91,.32)';
+    [[.08,.12,52],[.88,.12,62],[.08,.86,58],[.9,.84,55],[.31,.07,30],[.68,.94,34]].forEach(([x,y,r])=>{
+      ctx.beginPath(); ctx.ellipse(w*x,h*y,r*1.35,r,0,0,Math.PI*2); ctx.fill();
+    });
+    [[.1,.19,.8],[.22,.08,.65],[.78,.13,.8],[.9,.24,.68],[.1,.78,.85],[.2,.92,.68],[.82,.88,.8],[.94,.72,.7],[.34,.04,.55],[.66,.96,.58]].forEach(([x,y,s])=>drawTree(w*x,h*y,s));
 
-    const zones=[{x:cx-road/2-95,y:cy-road/2-95,l:'Q0 NW'},{x:cx+road/2+95,y:cy-road/2-95,l:'Q1 NE'},{x:cx-road/2-95,y:cy+road/2+95,l:'Q2 SW'},{x:cx+road/2+95,y:cy+road/2+95,l:'Q3 SE'}];
-    zones.forEach((z,i)=>{ctx.fillStyle=i===0?'rgba(34,211,238,.06)':'rgba(139,92,246,.05)';ctx.strokeStyle='rgba(148,163,184,.18)';ctx.beginPath();ctx.roundRect(z.x-48,z.y-48,96,96,14);ctx.fill();ctx.stroke();ctx.fillStyle='#94a3b8';ctx.font='11px monospace';ctx.textAlign='center';ctx.fillText(z.l,z.x,z.y);});
+    drawRoad(cx,cy,roadLength,roadAngle,roadWidth);
+    drawRoad(cx,cy,roadLength,-roadAngle,roadWidth);
+    const nsState=activeGroup==='NS'?signalState:'red';
+    const ewState=activeGroup==='EW'?signalState:'red';
+    const signalSide=56;
+    const sigAngles={North:roadAngle,South:roadAngle+Math.PI,East:Math.PI-roadAngle,West:-roadAngle};
+    const sigState={North:nsState,South:nsState,East:ewState,West:ewState};
+    ['North','South','East','West'].forEach(approach=>{
+      const a=sigAngles[approach];
+      const dist=-diagonal/2+(stopProgress-0.05)*diagonal/1.9;
+      const sx=cx+Math.cos(a)*dist-Math.sin(a)*signalSide;
+      const sy=cy+Math.sin(a)*dist+Math.cos(a)*signalSide;
+      drawSignal(sx,sy,sigState[approach],a);
+    });
 
-    const lights=[[cx-road/2-14,cy-road/2-14],[cx+road/2+14,cy-road/2-14],[cx-road/2-14,cy+road/2+14],[cx+road/2+14,cy+road/2+14]];
-    lights.forEach(([x,y],i)=>{ctx.fillStyle='#020617';ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();ctx.fillStyle=(i%2===0?'#22c55e':'#f59e0b');ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fill();});
-
-    for(const v of vehicles){
-      if(!v.waiting || emergency===false) v.progress += v.speed;
-      if(v.progress>1.9){served++; lockCount=Math.max(0,lockCount-(v.emergency?2:1)); vehicles.splice(vehicles.indexOf(v),1); if(v.emergency){emergency=false; for(const waiting of vehicles) waiting.waiting=false; log('pthread_cond_broadcast: emergency cleared; regular traffic resumed','#d946ef');} log(`pthread_mutex_unlock: vehicle #${v.id} cleared intersection`,'#60a5fa');continue;}
-      const p=position(v,cx,cy,road); drawVehicle(p.x,p.y,v);
+    const ambulance = ambulanceVehicle();
+    const opposingInBox = (group) => vehicles.some(o => o !== undefined && o.group !== group && (o.hasEntered || o.inBox));
+    const ordered=[...vehicles].sort((a,b)=>b.progress-a.progress);
+    for(const v of ordered){
+      v.roadWidth = roadWidth;
+      const spacingProgress=70*1.9/diagonal;
+      const front=ordered.find(other=>other!==v && other.approach===v.approach && other.progress>v.progress && !other.clearedJunction);
+      let nextProgress=v.progress+v.speed*delta;
+      const blockedByQueue = front && !(v.emergency && !front.hasEntered && !front.inBox);
+      if(blockedByQueue) nextProgress=Math.min(nextProgress,front.progress-spacingProgress);
+      const boxClear = !opposingInBox(v.group);
+      const greenForGroup = signalState==='green' && v.group===activeGroup && boxClear;
+      const emergencyTurn = ambulance && v===ambulance && greenForGroup;
+      const allowedBySignal = ambulance ? emergencyTurn : greenForGroup;
+      const canEnter=v.hasEntered || v.clearedJunction || allowedBySignal;
+      if(!canEnter) nextProgress=Math.min(nextProgress, stopProgress);
+      else if(nextProgress>stopProgress && boxClear) v.hasEntered=true;
+      if(!canEnter && !v.hasEntered) nextProgress=Math.min(nextProgress, stopProgress);
+      v.progress=Math.max(0,nextProgress);
+      v.inBox = !v.clearedJunction && v.progress > stopProgress && v.progress < exitProgress;
+      if(v.hasEntered && v.progress>exitProgress){
+        v.hasEntered=false;
+        v.clearedJunction=true;
+      }
+      if(v.hasEntered && v.waitingSince){
+        totalWaitMs+=now-v.waitingSince;
+        completedWaits++;
+        v.waitingSince=null;
+      }
+      v.waiting=!canEnter && v.progress>=stopProgress-.008;
+      if(v.waiting && !v.waitingSince) v.waitingSince=now;
+      if(v.progress>1.9){
+        served++;
+        vehicles.splice(vehicles.indexOf(v),1);
+        if(v.emergency){emergency=false; log('pthread_cond_broadcast: emergency cleared; queued traffic resumed','#d946ef');}
+        log(`pthread_mutex_unlock: vehicle #${v.id} cleared intersection`,'#60a5fa');
+        continue;
+      }
+      const p=position(v,cx,cy,w,h); drawVehicle(p.x,p.y,v,p.angle);
     }
+    const crossingVehicles=vehicles.filter(v=>v.hasEntered);
+    lockCount=Math.min(4,crossingVehicles.length*2);
     updateMetrics();
     requestAnimationFrame(draw);
   }
 
   function updateMetrics(){
+    const ns=queuedCount('NS');
+    const ew=queuedCount('EW');
+    const nsState=activeGroup==='NS'?signalState:'red';
+    const ewState=activeGroup==='EW'?signalState:'red';
+    const uiSignature=`${activeGroup}:${signalState}:${nsState}:${ewState}`;
+    if(updateMetrics.lastSignature!==uiSignature){
+      const renderLights=(id,state)=>{
+        const active=state==='green'?2:state==='yellow'?1:0;
+        document.getElementById(id).innerHTML=[0,1,2].map((index)=>`<span class="signal-dot ${index===active?['red','yellow','green'][active]:''}"></span>`).join('');
+      };
+      renderLights('nsLights',nsState);
+      renderLights('ewLights',ewState);
+      document.getElementById('phaseLabel').textContent=`${activeGroup} ${signalState.toUpperCase()}`;
+      updateMetrics.lastSignature=uiSignature;
+    }
+    document.getElementById('nsQueueCount').textContent=`${ns} queued`;
+    document.getElementById('ewQueueCount').textContent=`${ew} queued`;
+    const ambulance = ambulanceVehicle();
+    document.getElementById('phaseHint').textContent = ambulance
+      ? 'Ambulance corridor'
+      : (signalState==='green' ? 'Adaptive green remaining' : 'Intersection clearing');
+    const remaining = signalState==='green'
+      ? Math.max(0, Math.ceil((targetGreenMs - (performance.now()-phaseStartedAt))/1000))
+      : 0;
+    document.getElementById('countdown').textContent = ambulance ? 'EMG' : (signalState==='green' ? remaining+'s' : '…');
+    document.getElementById('modeBadge').textContent = ambulance ? 'EMERGENCY' : 'TRAFFIC';
     document.getElementById('throughput').textContent=served;
-    document.getElementById('wait').textContent=(protocolOn?(waits.length?0.8:0.2):(waits.length?2.4:0.5)).toFixed(1)+'s';
-    document.getElementById('contention').textContent=Math.min(100,lockCount*12)+'%';
+    const waitingVehicles=vehicles.filter(v=>v.waiting && v.waitingSince);
+    const currentWait=waitingVehicles.length?waitingVehicles.reduce((sum,v)=>sum+performance.now()-v.waitingSince,0)/waitingVehicles.length:0;
+    const avgWait=completedWaits?(totalWaitMs/completedWaits):currentWait;
+    document.getElementById('wait').textContent=(avgWait/1000).toFixed(1)+'s';
+    document.getElementById('contention').textContent=Math.min(100,(ns+ew)*8)+'%';
     document.getElementById('locks').textContent=lockCount+' / 4';
   }
 
+  document.getElementById('spawnNorthSouth').addEventListener('click',()=>spawn(false,Math.random()<.5?'North':'South'));
+  document.getElementById('spawnEastWest').addEventListener('click',()=>spawn(false,Math.random()<.5?'East':'West'));
   document.getElementById('spawnNormal').addEventListener('click',()=>spawn(false));
   document.getElementById('spawnEmergency').addEventListener('click',()=>{if(Date.now()-lastEmergency>600||!emergency)spawn(true);});
-  document.getElementById('protocol').addEventListener('click',e=>{protocolOn=!protocolOn;e.currentTarget.classList.toggle('on',protocolOn);document.getElementById('protocolText').textContent=protocolOn?'Hierarchy ordering enabled':'Reverse locking permitted';document.getElementById('protocolText').className=protocolOn?'text-xs text-emerald-400':'text-xs text-red-400';log(protocolOn?'DEADLOCK_AVOIDANCE: strict Q_low -> Q_high restored':'WARNING: hierarchy protocol OFF — circular wait risk','#f87171');});
+  document.getElementById('toggleTraffic').addEventListener('click',e=>{
+    autoTraffic=!autoTraffic;
+    e.currentTarget.querySelector('span:last-child').textContent=`Auto Traffic: ${autoTraffic?'ON · Heavy':'OFF'}`;
+    e.currentTarget.querySelector('span:first-child').className=autoTraffic?'text-emerald-300':'text-slate-500';
+    log(`DEMAND_GENERATOR: automatic traffic ${autoTraffic?'enabled (burst mode)':'paused'}`,autoTraffic?'#34d399':'#94a3b8');
+  });
+  const protocolButton=document.getElementById('protocol');
+  if(protocolButton) protocolButton.addEventListener('click',e=>{protocolOn=!protocolOn;e.currentTarget.classList.toggle('on',protocolOn);document.getElementById('protocolText').textContent=protocolOn?'Hierarchy ordering enabled':'Reverse locking permitted';document.getElementById('protocolText').className=protocolOn?'text-xs text-emerald-400':'text-xs text-red-400';log(protocolOn?'DEADLOCK_AVOIDANCE: strict Q_low -> Q_high restored':'WARNING: hierarchy protocol OFF — circular wait risk','#f87171');});
 
   log('pthread_mutex_init: 4 quadrant resources initialized','#22d3ee');
   log('pthread_cond_init: emergency broadcast channel ready','#a78bfa');
-  log('ENGINE_ONLINE: resource hierarchy active','#34d399');
+  log('ENGINE_ONLINE: adaptive signal monitor + resource locks active','#34d399');
+  log('DEMAND_GENERATOR: heavy burst traffic enabled','#fbbf24');
+  setInterval(()=>{document.getElementById('clock').textContent=new Date().toLocaleTimeString([], {hour12:false});},1000);
+  window.__traffic = {
+    vehicles,
+    spawn,
+    get phase(){ return {activeGroup, signalState}; }
+  };
   draw();
 })();
 </script>
