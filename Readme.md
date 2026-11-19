@@ -1,5 +1,6 @@
 # Multi-Threaded Traffic Light Intersection Controller  
 
+
 A high-performance C++ POSIX simulation demonstrating deadlock prevention, mutual exclusion, priority preemption, condition variables, thread-safe metrics, and a real-time smart-city dashboard.
 
 ## Highlights
